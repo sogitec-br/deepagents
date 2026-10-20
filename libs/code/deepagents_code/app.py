@@ -7644,6 +7644,7 @@ class DeepAgentsApp(App):
                 progress=progress,
                 include_prereleases=include_prereleases,
                 on_interpreter_change=mark_interpreter_changed,
+                allow_python_migration=False,
             )
         finally:
             if interpreter_changed:

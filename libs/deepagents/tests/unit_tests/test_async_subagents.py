@@ -2162,13 +2162,14 @@ class TestParentPull:
 
 class TestQueuedUpdates:
     @pytest.mark.parametrize("strategy", [None, "interrupt", "enqueue"])
+    @pytest.mark.parametrize("status", ["running", "waiting", "success", "error"])
     @pytest.mark.parametrize("asynchronous", [False, True])
-    async def test_update_strategy(self, strategy: str | None, *, asynchronous: bool) -> None:
+    async def test_update_strategy(self, strategy: str | None, status: str, *, asynchronous: bool) -> None:
         spec = _make_spec(**({"update_strategy": strategy} if strategy else {}))
         client = MagicMock()
         create = AsyncMock if asynchronous else MagicMock
         client.runs.create = create(return_value={"run_id": "run_followup", "status": "pending"})
-        runtime = _make_runtime_with_task(status="running")
+        runtime = _make_runtime_with_task(status=status)
         update = _get_tool(_build_async_subagent_tools([spec]), "update_async_task")
         with patch(
             "deepagents.middleware.async_subagents.get_client" if asynchronous else "deepagents.middleware.async_subagents.get_sync_client",
@@ -2185,10 +2186,15 @@ class TestQueuedUpdates:
         if strategy == "enqueue":
             assert task["status"] == "pending"
             assert task["superseded_run_ids"] == ["run_xyz"]
-            assert "without interrupting" in result.update["messages"][0].content
-            assert "dropped" not in result.update["messages"][0].content
+            if status == "running":
+                assert "without interrupting" in result.update["messages"][0].content
         else:
             assert task["status"] == "running"
+        confirmation = result.update["messages"][0].content
+        assert ("request was dropped" in confirmation) == (status == "waiting")
+        if status != "running":
+            assert "current run" not in confirmation
+            assert "Queued" not in confirmation
 
     async def test_queued_update_captures_current_parent_context(self) -> None:
         client = MagicMock()

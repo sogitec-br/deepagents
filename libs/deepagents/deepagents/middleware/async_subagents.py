@@ -1010,7 +1010,7 @@ def _build_check_tool(
 
 def _update_message(tracked: AsyncTask, strategy: str) -> str:
     """Confirm an update, noting when it replaced a pending human request."""
-    if strategy == "enqueue":
+    if strategy == "enqueue" and tracked["status"] in {"running", "pending"}:
         return f"Queued follow-up to async subagent without interrupting its current run. task_id: {tracked['task_id']}"
     msg = f"Updated async subagent. task_id: {tracked['task_id']}"
     if tracked["status"] == _WAITING:

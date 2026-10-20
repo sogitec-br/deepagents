@@ -2251,6 +2251,13 @@ class TestQueuedUpdates:
         queued = await _pull("abefore_agent", state, server)
         assert not queued["async_tasks"]
         assert "not completion of the latest task" in queued["messages"][0].content
+        finished = _FakeServer({"thread_abc": _child("follow-up done")}, {"run_id": "run_followup", "status": "success"})
+        simultaneous = await _pull("abefore_agent", state, finished)
+        replacement, completion = simultaneous["messages"]
+        assert replacement.id == message.id
+        assert "not completion of the latest task" in replacement.content
+        assert completion["deepagents_notification"]["run_id"] == "run_followup"
+        assert simultaneous["async_tasks"]["thread_abc"]["status"] == "success"
         running = await _pull("abefore_model", state, _FakeServer(run={"run_id": "run_followup", "status": "running"}))
         assert "messages" not in running
         assert running["async_tasks"]["thread_abc"]["run_id"] == "run_followup"

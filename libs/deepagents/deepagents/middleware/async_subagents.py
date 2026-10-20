@@ -1515,6 +1515,8 @@ class AsyncSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         recorded = self._record_notification(state) or {}
         tasks = {**(state.get("async_tasks") or {}), **recorded.get("async_tasks", {})}
         updates = await self._apull(tasks)
+        if recorded.get("messages"):
+            updates["messages"] = [*recorded["messages"], *updates.get("messages", [])]
         return {
             **recorded,
             **updates,

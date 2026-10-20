@@ -20271,8 +20271,12 @@ class TestNotificationCenterIntegration:
         notice = "Python 3.14 is required; migrating the tool environment."
 
         async def install(
-            *, on_notice: Callable[[str], Awaitable[None]], **_kwargs: object
+            *,
+            on_notice: Callable[[str], Awaitable[None]],
+            allow_python_migration: bool,
+            **_kwargs: object,
         ) -> tuple[bool, str, None]:
+            assert allow_python_migration is False
             await on_notice(notice)
             assert mount.call_args.args[0]._content == notice
             return False, "resolution failed", None
@@ -20327,8 +20331,12 @@ class TestNotificationCenterIntegration:
         notice = "Python 3.14 is required; migrating [tool] environment."
 
         def install(
-            *, on_notice: Callable[[str], None], **_kwargs: object
+            *,
+            on_notice: Callable[[str], None],
+            allow_python_migration: bool,
+            **_kwargs: object,
         ) -> tuple[bool, str, str]:
+            assert allow_python_migration is False
             on_notice(notice)
             assert notice in notified
             return True, "Updated deepagents-code", "2.0.0"

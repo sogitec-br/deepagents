@@ -290,7 +290,7 @@
   },
   {
     "function": {
-      "description": "Send updated instructions to an async subagent on the same thread, with its full history plus your message. The app configures whether each agent interrupts its current run or queues the follow-up without interrupting it. The task_id remains the same; pending means the latest follow-up is queued and earlier work may still be running. Configured strategies: remote-researcher: interrupt; remote-analyst: interrupt",
+      "description": "Send updated instructions to an async subagent. Interrupts the current run and starts a new one on the same thread, so the subagent sees the full conversation history plus your new message. The task_id remains the same.",
       "name": "update_async_task",
       "parameters": {
         "properties": {

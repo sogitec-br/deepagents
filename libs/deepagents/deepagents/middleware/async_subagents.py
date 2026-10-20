@@ -1110,16 +1110,23 @@ def _build_update_tool(
             }
         )
 
+    description = (
+        "Send updated instructions to an async subagent. Interrupts the current run and starts "
+        "a new one on the same thread, so the subagent sees the full conversation history plus "
+        "your new message. The task_id remains the same."
+    )
+    queued_agents = ", ".join(f"`{name}`" for name, spec in agent_map.items() if spec.get("update_strategy") == "enqueue")
+    if queued_agents:
+        description += (
+            f"\n\nException: for {queued_agents}, follow-ups queue behind the current run without interrupting it. "
+            "A pending status means the latest follow-up is queued and earlier work may still be running."
+        )
+
     return StructuredTool.from_function(
         name="update_async_task",
         func=update_async_task,
         coroutine=aupdate_async_task,
-        description=(
-            "Send updated instructions to an async subagent on the same thread, with its full history plus your message. "
-            "The app configures whether each agent interrupts its current run or queues the follow-up without interrupting it. "
-            "The task_id remains the same; pending means the latest follow-up is queued and earlier work may still be running. "
-            "Configured strategies: " + "; ".join(f"{name}: {spec.get('update_strategy', 'interrupt')}" for name, spec in agent_map.items())
-        ),
+        description=description,
         infer_schema=False,
         args_schema=UpdateAsyncTaskSchema,
     )

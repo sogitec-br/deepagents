@@ -235,6 +235,25 @@ class TestBuildAsyncSubagentTools:
         assert "researcher" in launch_tool.description
         assert "Research agent" in launch_tool.description
 
+    @pytest.mark.parametrize("strategy", [None, "interrupt"])
+    def test_default_update_description_is_unchanged(self, strategy: str | None) -> None:
+        spec = _make_spec(**({"update_strategy": strategy} if strategy else {}))
+        update = _get_tool(_build_async_subagent_tools([spec]), "update_async_task")
+        assert update.description == (
+            "Send updated instructions to an async subagent. Interrupts the current run and starts "
+            "a new one on the same thread, so the subagent sees the full conversation history plus "
+            "your new message. The task_id remains the same."
+        )
+
+    def test_update_description_names_only_enqueue_agents(self) -> None:
+        specs = [_make_spec("researcher"), _make_spec("coder", update_strategy="enqueue"), _make_spec("tester", update_strategy="enqueue")]
+        update = _get_tool(_build_async_subagent_tools(specs), "update_async_task")
+        default = _get_tool(_build_async_subagent_tools([_make_spec()]), "update_async_task")
+        assert update.description.startswith(default.description)
+        assert "for `coder`, `tester`, follow-ups queue behind the current run without interrupting it" in update.description
+        assert "researcher" not in update.description
+        assert "pending" in update.description
+
 
 class TestLaunchTool:
     def test_launch_invalid_type_returns_error_string(self) -> None:

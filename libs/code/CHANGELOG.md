@@ -2,6 +2,13 @@
 
 # Deep Agents Code Changelog
 
+## [0.1.88](https://github.com/langchain-ai/deepagents/compare/deepagents-code==0.1.87...deepagents-code==0.1.88) (2026-10-21)
+
+
+### Bug Fixes
+
+* **code:** silence no-op automatic cache offloads ([#7078](https://github.com/langchain-ai/deepagents/issues/7078)) ([215392a](https://github.com/langchain-ai/deepagents/commit/215392aa3dfa08d21bc30a696b2347dcfbd44ebf))
+
 ## [0.1.87](https://github.com/langchain-ai/deepagents/compare/deepagents-code==0.1.86...deepagents-code==0.1.87) (2026-10-20)
 
 ### Features

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 LangChain, Inc.
 """Thread-keyed QuickJS REPL registry, console bridge, and result formatter.
 
 Kept separate from `middleware.py` so the REPL mechanics stay testable
@@ -36,6 +37,7 @@ from quickjs_rs import (
     Snapshot,
     SourceTransform,
     ThreadWorker,
+    run_coroutine_on_loop,
 )
 from quickjs_rs import (
     TimeoutError as QJSTimeoutError,
@@ -59,6 +61,22 @@ if TYPE_CHECKING:
     from langgraph.prebuilt import ToolRuntime
 
 logger = logging.getLogger(__name__)
+
+
+async def _finish_cleanup(task: asyncio.Task[None]) -> None:
+    """Keep an owned resource close alive through repeated caller cancellation."""
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
 
 _DEFAULT_MAX_SUBAGENT_CONCURRENCY = 32
 _TASK_FUNCTION_NAME = "task"
@@ -375,6 +393,9 @@ class _ThreadREPL:
         self._max_subagent_concurrency = max_subagent_concurrency
         self._console = _ConsoleBuffer(max_stdout_chars)
         self._ctx: Context | None = None
+        self._closing = False
+        self._evaluations: set[asyncio.Task[Any]] = set()
+        self._close_task: asyncio.Task[None] | None = None
         # PTC state. `_registered_tools` tracks which camel-case names
         # have already had their host-function bridge installed on the
         # QuickJS context. Host functions cannot be un-registered, so we
@@ -411,7 +432,7 @@ class _ThreadREPL:
 
     def _require_ctx(self) -> Context:
         """Return the live QuickJS context or raise if this REPL is closed."""
-        if self._ctx is None:
+        if self._ctx is None or self._closing:
             msg = "QuickJS context is closed"
             raise RuntimeError(msg)
         return self._ctx
@@ -574,18 +595,15 @@ class _ThreadREPL:
         current_loop = asyncio.get_running_loop()
         if current_loop is outer_loop:
             return await _call()
-        future = asyncio.run_coroutine_threadsafe(_call(), outer_loop)
-        try:
-            return await asyncio.wrap_future(future)
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
+        return await run_coroutine_on_loop(_call(), loop=outer_loop)
 
     def _register_task_bridge(self) -> None:
         """Install the async host function backing top-level `task()`."""
         ctx = self._require_ctx()
 
         async def _bridge(raw_input: Any = None) -> Any:
+            if self._closing:
+                raise asyncio.CancelledError
             state = self._ptc_state
             if state is None:
                 msg = "task bridge called outside active eval"
@@ -599,6 +617,8 @@ class _ThreadREPL:
             dispatch_ordinal = state.task_dispatch_count
             self._ptc_state = replace(state, task_dispatch_count=dispatch_ordinal + 1)
             async with task_calls:
+                if self._closing:
+                    raise asyncio.CancelledError
                 try:
                     result = await self._ainvoke_task_on_outer_loop(
                         payload,
@@ -656,12 +676,7 @@ class _ThreadREPL:
         current_loop = asyncio.get_running_loop()
         if current_loop is outer_loop:
             return await _call()
-        future = asyncio.run_coroutine_threadsafe(_call(), outer_loop)
-        try:
-            return await asyncio.wrap_future(future)
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
+        return await run_coroutine_on_loop(_call(), loop=outer_loop)
 
     def _register_tool_bridge(self, camel: str) -> str:
         """Install a host-function bridge for one camel-cased tool name.
@@ -676,6 +691,8 @@ class _ThreadREPL:
         registered = self._registered_tools
 
         async def _bridge(raw_input: Any = None) -> Any:
+            if self._closing:
+                raise asyncio.CancelledError
             tool = registered.get(camel)
             if tool is None:
                 # Shouldn't happen — we only rewrite `globalThis.tools`
@@ -796,6 +813,11 @@ class _ThreadREPL:
         and a loud failure is a better signal than silent serialisation.
         """
         ctx = self._require_ctx()
+        evaluation = asyncio.current_task()
+        if evaluation is None:
+            msg = "QuickJS evaluation requires an asyncio task"
+            raise RuntimeError(msg)
+        self._evaluations.add(evaluation)
         outcome = EvalOutcome()
         # Save/restore rather than clear-on-exit: a second eval that hits
         # ConcurrentEvalError would otherwise null out the in-flight
@@ -876,6 +898,7 @@ class _ThreadREPL:
             outcome.error_message = e.error_message
             _clear_exception_references(e)
         finally:
+            self._evaluations.discard(evaluation)
             self._ptc_state = prev_ptc_state
             outcome.stdout, outcome.stdout_truncated_chars = self._console.drain()
         return outcome
@@ -892,9 +915,24 @@ class _ThreadREPL:
         await self._worker.run_async(self._aclose())
 
     async def _aclose(self) -> None:
+        if self._close_task is None:
+            self._closing = True
+            self._close_task = asyncio.create_task(self._finish_close())
+        await _finish_cleanup(self._close_task)
+
+    async def _finish_close(self) -> None:
+        pending = list(self._evaluations)
+        for task in pending:
+            if not task.cancelling():
+                task.cancel()
+        outcomes = await asyncio.gather(*pending, return_exceptions=True)
         if self._ctx is not None:
             self._ctx.close()
             self._ctx = None
+        errors = [error for error in outcomes if isinstance(error, Exception)]
+        if errors:
+            msg = "QuickJS evaluation cleanup failed"
+            raise ExceptionGroup(msg, errors)
 
 
 @dataclass
@@ -1015,11 +1053,14 @@ class _Registry:
         slot.worker.close()
 
     async def _aclose_slot(self, slot: _Slot) -> None:
+        await _finish_cleanup(asyncio.create_task(self._aclose_slot_resources(slot)))
+
+    async def _aclose_slot_resources(self, slot: _Slot) -> None:
         with contextlib.suppress(Exception):
             await slot.repl.aclose()
         with contextlib.suppress(Exception):
             await slot.worker.run_async(_aclose_runtime(slot.runtime))
-        slot.worker.close()
+        await asyncio.to_thread(slot.worker.close)
 
     async def _acreate_runtime(self) -> Runtime:
         return Runtime(
